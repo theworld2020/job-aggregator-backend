@@ -26,3 +26,9 @@ app.get('/', (req, res) => res.send('🚀 Job Aggregator Backend is running'));
 app.listen(port, () => {
   console.log(`✅ Server running on port ${port}`);
 });
+
+import jobsRouter from "./routes/jobs.js";
+app.use("/api/jobs", jobsRouter);
+
+import jobsRouter from "./routes/jobs.js";
+app.use("/api/jobs", jobsRouter);
