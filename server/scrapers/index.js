@@ -1,6 +1,8 @@
+// server/scrapers/index.js
 const linkedinScraper = require('./linkedinScraper');
+// future: const naukriScraper = require('./naukriScraper');
 
-module.exports = async function scrapeFromSites(sites, roles, city) {
+module.exports = async function scrapeFromSites(sites = [], roles = [], city = '') {
   const results = [];
 
   for (const site of sites) {
@@ -8,7 +10,7 @@ module.exports = async function scrapeFromSites(sites, roles, city) {
       const siteResults = await linkedinScraper(roles, city);
       results.push(...siteResults);
     }
-    // Future: add more sites (e.g., instahyre, naukri, indeed)
+    // else if (site === 'naukri') { ... }
   }
 
   return results;
