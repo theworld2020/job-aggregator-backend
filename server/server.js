@@ -10,69 +10,64 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ✅ Universal CORS Configuration for Studio + Frontend + Local */
+/* ✅ Fully open, resilient CORS setup (for Looker Studio, Render, Vercel, localhost) */
+const allowedOrigins = [
+  "https://datastudio.google.com",
+  "https://lookerstudio.google.com",
+  "https://script.google.com",
+  "https://job-aggregator-frontend.vercel.app",
+  "https://job-aggregator-backend-oo5v.onrender.com",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+
 const corsOptions = {
   origin: (origin, callback) => {
-    const allowedOrigins = [
-      "https://datastudio.google.com",
-      "https://lookerstudio.google.com",
-      "https://script.google.com",
-      "https://job-aggregator-backend-oo5v.onrender.com",
-      "https://job-aggregator-frontend.vercel.app",
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-    ];
-
-    if (!origin || allowedOrigins.includes(origin) || origin.includes("googleusercontent.com")) {
+    if (!origin) return callback(null, true); // allow curl / server-to-server
+    if (
+      allowedOrigins.includes(origin) ||
+      origin.includes("googleusercontent.com")
+    ) {
       callback(null, true);
     } else {
-      console.log("❌ CORS Blocked:", origin);
+      console.log("❌ CORS Blocked Origin:", origin);
       callback(new Error("Not allowed by CORS"));
     }
   },
   methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type", "x-scrape-secret"],
   credentials: true,
+  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // Preflight support
+app.options("*", cors(corsOptions)); // Preflight requests
+app.use(express.json());
 
-// ✅ Fallback CORS headers (safety net)
+/* 🩵 Global fallback CORS headers */
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-scrape-secret");
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, x-scrape-secret"
+  );
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   next();
 });
 
-app.use(express.json());
-
-/* 🩺 Health check route — verifies DB and uptime */
+/* 🩺 Health check */
 app.get("/api/health", async (req, res) => {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout")), 5000)
-  );
-
   try {
-    const check = pool.connect().then(async (client) => {
-      const result = await client.query("SELECT NOW()");
-      client.release();
-      return result;
-    });
-
-    const result = await Promise.race([check, timeout]);
+    const client = await pool.connect();
+    const result = await client.query("SELECT NOW()");
+    client.release();
     res.json({
       status: "ok",
       db: "connected",
-      time: result?.rows?.[0]?.now || new Date().toISOString(),
+      time: result.rows[0].now,
     });
   } catch (err) {
-    console.error("❌ Health check error:", err.message);
-    res.status(500).json({
-      status: "error",
-      db: err.message === "Timeout" ? "timeout" : "disconnected",
-    });
+    res.status(500).json({ status: "error", message: err.message });
   }
 });
 
@@ -80,7 +75,7 @@ app.get("/api/health", async (req, res) => {
 app.use("/api/jobs", jobsRouter);
 app.use("/api/scrape", scrapeRouter);
 
-/* 🚀 Start the server */
+/* 🚀 Start server */
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
   try {
@@ -92,14 +87,14 @@ app.listen(PORT, "0.0.0.0", async () => {
   }
 });
 
-/* 💓 Periodic DB ping to prevent Neon idle disconnects */
+/* 💓 Keep-alive ping for Neon */
 setInterval(async () => {
   try {
     const client = await pool.connect();
     await client.query("SELECT 1");
     client.release();
-    console.log("💓 DB Keep-alive ping successful");
+    console.log("💓 DB Keep-alive ping successful", new Date().toISOString());
   } catch (err) {
     console.error("⚠️ DB Keep-alive ping failed:", err.message);
   }
-}, 5 * 60 * 1000); // every 5 minutes
+}, 5 * 60 * 1000);
