@@ -1,130 +1,89 @@
-// server/scrapers/linkedinScraper.js
-const fs = require('fs');
-const chromium = require('@sparticuz/chromium');
-const puppeteer = require('puppeteer-core');
+const chromium = require("@sparticuz/chromium");
+const puppeteer = require("puppeteer-core");
+const fs = require("fs");
 
-/**
- * linkedinScraper(roles: string[], city: string)
- * returns array of jobs: { title, company, location, url, source, posted_date, days_ago }
- */
-module.exports = async function linkedinScraper(roles = [], city = '') {
-  console.log('🔍 Starting LinkedIn scraper for', roles.join(', '), city);
+module.exports = async function linkedinScraper(roles, city) {
+  console.log("🔍 Starting LinkedIn scraper for", roles.join(", "), city);
 
-  const executablePath = await chromium.executablePath;
-
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath,
-    headless: chromium.headless,
-    ignoreHTTPSErrors: true
-  });
-
-  const page = await browser.newPage();
+  let browser;
   const results = [];
 
-  // ✅ Helper to convert "2 days ago" → Date()
-  function parseRelativeDate(text) {
-    if (!text) return new Date();
-    text = text.toLowerCase().trim();
-    const now = new Date();
-
-    if (text.includes('today') || text.includes('just')) return now;
-    if (text.includes('yesterday')) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - 1);
-      return d;
-    }
-
-    const dayMatch = text.match(/(\d+)\s+day/);
-    if (dayMatch) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - parseInt(dayMatch[1], 10));
-      return d;
-    }
-
-    const weekMatch = text.match(/(\d+)\s+week/);
-    if (weekMatch) {
-      const d = new Date(now);
-      d.setDate(now.getDate() - parseInt(weekMatch[1], 10) * 7);
-      return d;
-    }
-
-    const hourMatch = text.match(/(\d+)\s+hour/);
-    if (hourMatch) {
-      const d = new Date(now);
-      d.setHours(now.getHours() - parseInt(hourMatch[1], 10));
-      return d;
-    }
-
-    // fallback
-    return now;
-  }
-
   try {
-    const query = encodeURIComponent(`${roles.join(' OR ')} ${city}`.trim());
-    const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${query}&location=${encodeURIComponent(city)}&f_TPR=r604800`;
-    console.log('🌐 Visiting:', url);
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    });
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+    const page = await browser.newPage();
 
-    await page.waitForSelector('.base-card, .job-card-container', { timeout: 20000 });
+    const query = encodeURIComponent(`${roles.join(" OR ")} ${city}`);
+    const url = `https://www.linkedin.com/jobs/search?keywords=${query}&location=${encodeURIComponent(city)}&f_TPR=r604800`;
+    console.log("🌐 Visiting:", url);
 
-    // ✅ Scrape multiple selectors
-    const jobs = await page.$$eval('.base-card, .job-card-container', (els) =>
-      els.slice(0, 50).map(el => {
-        const title =
-          el.querySelector('.base-search-card__title')?.innerText?.trim() ||
-          el.querySelector('.job-card-container__title')?.innerText?.trim() || '';
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-        const company =
-          el.querySelector('.base-search-card__subtitle')?.innerText?.trim() ||
-          el.querySelector('.job-card-container__company-name')?.innerText?.trim() || '';
+    // Try to close login or cookie popups
+    try {
+      await page.evaluate(() => {
+        const dismissBtns = Array.from(document.querySelectorAll("button"));
+        const dismiss = dismissBtns.find(b => 
+          b.innerText.includes("Sign in") || 
+          b.innerText.includes("Accept") || 
+          b.getAttribute("aria-label")?.includes("Dismiss"));
+        if (dismiss) dismiss.click();
+      });
+    } catch {
+      console.log("ℹ️ No popup to close");
+    }
 
-        const location =
-          el.querySelector('.job-search-card__location')?.innerText?.trim() ||
-          el.querySelector('.job-card-container__metadata-item')?.innerText?.trim() || '';
+    // Wait for job cards (LinkedIn changes these often)
+    await page.waitForSelector(".job-search-card", { timeout: 20000 }).catch(() => console.warn("⚠️ No job cards found yet"));
 
-        const url =
-          el.querySelector('a.base-card__full-link')?.href ||
-          el.querySelector('a.job-card-container__link')?.href || '';
+    await autoScroll(page);
 
-        const postedText =
-          el.querySelector('time')?.innerText?.trim() ||
-          el.querySelector('.job-card-list__footer-wrapper time')?.innerText?.trim() || '';
-
-        return { title, company, location, url, postedText };
-      })
+    const jobs = await page.$$eval(".job-search-card", els =>
+      els.slice(0, 25).map(el => ({
+        title: el.querySelector(".base-search-card__title")?.innerText.trim() || "",
+        company: el.querySelector(".base-search-card__subtitle")?.innerText.trim() || "",
+        location: el.querySelector(".job-search-card__location")?.innerText.trim() || "",
+        url: el.querySelector("a.base-card__full-link")?.href || "",
+        source: "linkedin",
+        posted_date: new Date().toISOString(),
+        days_ago: 0,
+      }))
     );
 
-    // ✅ Normalize and parse dates
-    for (const j of jobs) {
-      const parsedDate = parseRelativeDate(j.postedText);
-      const days_ago = Math.floor((Date.now() - parsedDate.getTime()) / (1000 * 60 * 60 * 24));
-
-      results.push({
-        title: j.title || '',
-        company: j.company || '',
-        location: j.location || city,
-        url: j.url || '',
-        source: 'linkedin',
-        posted_date: parsedDate.toISOString(),
-        days_ago
-      });
-    }
+    results.push(...jobs);
   } catch (e) {
-    console.error('❌ LinkedIn scrape failed:', e.message);
+    console.error("❌ LinkedIn scrape failed:", e.message);
     try {
-      const html = await page.content();
-      fs.writeFileSync('linkedin_debug.html', html);
-      console.log('🧾 Saved snapshot: linkedin_debug.html');
-    } catch (err) {
-      console.error('⚠️ Could not save debug snapshot:', err.message);
-    }
+      const html = await (await page.content());
+      fs.writeFileSync("linkedin_debug.html", html);
+      console.log("🧾 Saved snapshot: linkedin_debug.html");
+    } catch {}
   } finally {
-    await browser.close();
+    if (browser) await browser.close();
   }
 
   console.log(`✅ LinkedIn scraper found ${results.length} jobs`);
   return results;
 };
+
+async function autoScroll(page) {
+  await page.evaluate(async () => {
+    await new Promise((resolve) => {
+      let totalHeight = 0;
+      const distance = 400;
+      const timer = setInterval(() => {
+        window.scrollBy(0, distance);
+        totalHeight += distance;
+        if (totalHeight >= document.body.scrollHeight) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 250);
+    });
+  });
+}
