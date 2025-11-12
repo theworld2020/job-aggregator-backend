@@ -2,26 +2,26 @@ import linkedinScraper from "./linkedinScraper.js";
 import naukriScraper from "./naukriScraper.js";
 import instahyreScraper from "./instahyreScraper.js";
 
-/**
- * Runs all active scrapers and combines results.
- */
-export async function runScraper(roles, city) {
-  console.log("🚀 Running scrapers for:", roles.join(", "), "in", city);
+export async function runScraper(sites, roles, city) {
+  console.log(`🚀 Running scrapers for: ${roles.join(", ")} in ${city}`);
 
-  const results = [];
+  let allResults = [];
 
-  try {
-    const [linkedinJobs, naukriJobs, instahyreJobs] = await Promise.all([
-      linkedinScraper(roles, city),
-      naukriScraper(roles, city),
-      instahyreScraper(roles, city),
-    ]);
-
-    results.push(...linkedinJobs, ...naukriJobs, ...instahyreJobs);
-  } catch (error) {
-    console.error("❌ Error in runScraper:", error.message);
+  if (sites.includes("linkedin")) {
+    const linkedinResults = await linkedinScraper(roles, city);
+    allResults = allResults.concat(linkedinResults);
   }
 
-  console.log(`📦 Total jobs scraped: ${results.length}`);
-  return results;
+  if (sites.includes("naukri")) {
+    const naukriResults = await naukriScraper(roles, city);
+    allResults = allResults.concat(naukriResults);
+  }
+
+  if (sites.includes("instahyre")) {
+    const instahyreResults = await instahyreScraper(roles, city);
+    allResults = allResults.concat(instahyreResults);
+  }
+
+  console.log(`📦 Total jobs scraped: ${allResults.length}`);
+  return allResults;
 }
