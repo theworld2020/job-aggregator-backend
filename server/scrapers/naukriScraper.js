@@ -1,32 +1,43 @@
-const puppeteer = require('puppeteer');
+import puppeteer from "puppeteer";
 
-module.exports = async function naukriScraper(roles, city) {
+/**
+ * Scrapes Naukri job listings for the given roles and city.
+ */
+export default async function naukriScraper(roles, city) {
+  console.log("🟧 Running Naukri scraper for:", roles.join(", "), "in", city);
+  const allJobs = [];
   const browser = await puppeteer.launch({ headless: true });
   const page = await browser.newPage();
-  const results = [];
 
   try {
-    const query = encodeURIComponent(`${roles.join(' ')} ${city}`);
-    await page.goto(`https://www.naukri.com/${query}-jobs`, { waitUntil: 'domcontentloaded' });
+    for (const role of roles) {
+      const query = encodeURIComponent(`${role} ${city}`);
+      const url = `https://www.naukri.com/${query}-jobs`;
 
-    const jobs = await page.$$eval('.jobTuple', els =>
-      els.slice(0, 10).map(el => ({
-        title: el.querySelector('.title')?.innerText || '',
-        company: el.querySelector('.subTitle')?.innerText || '',
-        location: el.querySelector('.loc')?.innerText || '',
-        url: el.querySelector('.title a')?.href || '',
-        source: 'naukri',
-        posted_date: new Date().toISOString(),
-        days_ago: 0
-      }))
-    );
+      console.log("🔗 Fetching:", url);
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-    results.push(...jobs);
-  } catch (e) {
-    console.error('Naukri scrape failed:', e.message);
+      const jobs = await page.$$eval(".jobTuple", (cards) =>
+        cards.map((card) => {
+          const title = card.querySelector(".title")?.innerText.trim();
+          const company = card.querySelector(".subTitle")?.innerText.trim();
+          const location = card.querySelector(".loc")?.innerText.trim();
+          const url = card.querySelector("a.title")?.href;
+          return title && company && url
+            ? { title, company, location, source: "Naukri", url }
+            : null;
+        })
+      );
+
+      allJobs.push(...jobs.filter(Boolean));
+    }
+
+    console.log(`✅ Naukri scraper found ${allJobs.length} jobs.`);
+  } catch (err) {
+    console.error("❌ Naukri scraper failed:", err.message);
   } finally {
     await browser.close();
   }
 
-  return results;
-};
+  return allJobs;
+}
