@@ -3,7 +3,7 @@ const router = express.Router();
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// ✅ PostgreSQL pool connection
+// ✅ PostgreSQL connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
@@ -16,7 +16,7 @@ router.get('/test', (req, res) => {
 
 // 🧩 Main search endpoint
 router.get('/', async (req, res) => {
-  const { roles, city, days } = req.query;
+  const { roles, city, days, sources } = req.query;
 
   let query = `
     SELECT id, title, company, location, url, source, posted_date, created_at
@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
   const params = [];
   let paramIndex = 1;
 
-  // 🔍 Filter by role (supports multiple roles, comma-separated)
+  // 🔍 Filter by roles (multi-role search)
   if (roles) {
     const roleList = roles.split(',').map(r => `%${r.trim()}%`);
     const roleConditions = roleList.map((_, i) => `title ILIKE $${paramIndex + i}`).join(' OR ');
@@ -42,12 +42,21 @@ router.get('/', async (req, res) => {
     paramIndex++;
   }
 
-  // 🗓️ Filter by days (e.g. last 7 days)
+  // ⏱️ Filter by days (e.g., last 7 days)
   if (days) {
     query += ` AND created_at >= NOW() - INTERVAL '${days} days'`;
   }
 
-  // 🔢 Order and limit
+  // 🌐 Filter by job source (linkedin, naukri, indeed, etc.)
+  if (sources) {
+    const sourceList = sources.split(',').map(s => s.trim().toLowerCase());
+    const sourceConditions = sourceList.map((_, i) => `LOWER(source) = $${paramIndex + i}`).join(' OR ');
+    query += ` AND (${sourceConditions})`;
+    params.push(...sourceList);
+    paramIndex += sourceList.length;
+  }
+
+  // 🔢 Sort by most recent
   query += ' ORDER BY created_at DESC LIMIT 50';
 
   try {
