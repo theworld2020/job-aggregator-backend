@@ -1,6 +1,7 @@
 // server/scrapers/linkedinScraper.js
-const puppeteer = require('puppeteer');
 const fs = require('fs');
+const chromium = require('@sparticuz/chromium');
+const puppeteer = require('puppeteer-core');
 
 /**
  * linkedinScraper(roles: string[], city: string)
@@ -8,134 +9,106 @@ const fs = require('fs');
  */
 module.exports = async function linkedinScraper(roles = [], city = '') {
   console.log('🔍 Starting LinkedIn scraper for', roles.join(', '), city);
+
+  const executablePath = await chromium.executablePath;
+
   const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless: chromium.headless,
+    ignoreHTTPSErrors: true
   });
 
   const page = await browser.newPage();
   const results = [];
 
-  // Helper to parse relative text like "2 days ago", "Posted 3 days ago", "1 week ago", "30+ days ago", "Just posted"
+  // ✅ Helper to convert "2 days ago" → Date()
   function parseRelativeDate(text) {
-    if (!text) return null;
+    if (!text) return new Date();
     text = text.toLowerCase().trim();
-
     const now = new Date();
 
-    if (text.includes('just') || text.includes('today')) return now;
-
-    // examples: "2 days ago", "Posted 3 days ago", "1 week ago"
-    const daysMatch = text.match(/(\d+)\s+day/);
-    if (daysMatch) {
-      const days = parseInt(daysMatch[1], 10);
-      const d = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
-      return d;
-    }
-    const weeksMatch = text.match(/(\d+)\s+week/);
-    if (weeksMatch) {
-      const weeks = parseInt(weeksMatch[1], 10);
-      const d = new Date(now.getTime() - weeks * 7 * 24 * 60 * 60 * 1000);
-      return d;
-    }
-    const hoursMatch = text.match(/(\d+)\s+hour/);
-    if (hoursMatch) {
-      const hours = parseInt(hoursMatch[1], 10);
-      const d = new Date(now.getTime() - hours * 60 * 60 * 1000);
-      return d;
-    }
-    const minsMatch = text.match(/(\d+)\s+min/);
-    if (minsMatch) {
-      const mins = parseInt(minsMatch[1], 10);
-      const d = new Date(now.getTime() - mins * 60 * 1000);
+    if (text.includes('today') || text.includes('just')) return now;
+    if (text.includes('yesterday')) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - 1);
       return d;
     }
 
-    // If it's a full date/ISO we try Date.parse
-    const parsed = Date.parse(text);
-    if (!isNaN(parsed)) return new Date(parsed);
+    const dayMatch = text.match(/(\d+)\s+day/);
+    if (dayMatch) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - parseInt(dayMatch[1], 10));
+      return d;
+    }
 
-    return null;
+    const weekMatch = text.match(/(\d+)\s+week/);
+    if (weekMatch) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - parseInt(weekMatch[1], 10) * 7);
+      return d;
+    }
+
+    const hourMatch = text.match(/(\d+)\s+hour/);
+    if (hourMatch) {
+      const d = new Date(now);
+      d.setHours(now.getHours() - parseInt(hourMatch[1], 10));
+      return d;
+    }
+
+    // fallback
+    return now;
   }
 
   try {
     const query = encodeURIComponent(`${roles.join(' OR ')} ${city}`.trim());
-    const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${query}&location=${encodeURIComponent(city)}`;
-
+    const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${query}&location=${encodeURIComponent(city)}&f_TPR=r604800`;
     console.log('🌐 Visiting:', url);
+
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Wait for cards
     await page.waitForSelector('.base-card, .job-card-container', { timeout: 20000 });
 
-    // Extract up to 50 cards (you can change limit)
+    // ✅ Scrape multiple selectors
     const jobs = await page.$$eval('.base-card, .job-card-container', (els) =>
       els.slice(0, 50).map(el => {
-        // Try multiple selectors for title/company/location/url/time
         const title =
-          el.querySelector('.base-search-card__title')?.innerText ||
-          el.querySelector('.job-card-list__title')?.innerText ||
-          el.querySelector('.job-card-container__title')?.innerText ||
-          '';
+          el.querySelector('.base-search-card__title')?.innerText?.trim() ||
+          el.querySelector('.job-card-container__title')?.innerText?.trim() || '';
 
         const company =
-          el.querySelector('.base-search-card__subtitle')?.innerText ||
-          el.querySelector('.job-card-container__company-name')?.innerText ||
-          el.querySelector('.job-card-container__company')?.innerText ||
-          '';
+          el.querySelector('.base-search-card__subtitle')?.innerText?.trim() ||
+          el.querySelector('.job-card-container__company-name')?.innerText?.trim() || '';
 
         const location =
-          el.querySelector('.job-search-card__location')?.innerText ||
-          el.querySelector('.job-card-container__metadata-item')?.innerText ||
-          el.querySelector('.base-search-card__location')?.innerText ||
-          '';
+          el.querySelector('.job-search-card__location')?.innerText?.trim() ||
+          el.querySelector('.job-card-container__metadata-item')?.innerText?.trim() || '';
 
         const url =
           el.querySelector('a.base-card__full-link')?.href ||
-          el.querySelector('a.job-card-container__link')?.href ||
-          '';
+          el.querySelector('a.job-card-container__link')?.href || '';
 
-        // posted text
         const postedText =
-          el.querySelector('time')?.innerText ||
-          el.querySelector('.job-card-list__footer-wrapper time')?.innerText ||
-          el.querySelector('.job-card-list__footer-wrapper .date')?.innerText ||
-          '';
+          el.querySelector('time')?.innerText?.trim() ||
+          el.querySelector('.job-card-list__footer-wrapper time')?.innerText?.trim() || '';
 
-        return {
-          title: title?.trim(),
-          company: company?.trim(),
-          location: location?.trim(),
-          url: url || '',
-          source: 'linkedin',
-          postedText: postedText?.trim()
-        };
+        return { title, company, location, url, postedText };
       })
     );
 
-    // Convert postedText to posted_date and days_ago in Node (so we can use parseRelativeDate())
+    // ✅ Normalize and parse dates
     for (const j of jobs) {
-      let posted_date = new Date().toISOString();
-      let days_ago = 0;
-      try {
-        const candidate = parseRelativeDate(j.postedText);
-        if (candidate) {
-          posted_date = candidate.toISOString();
-          const diffMs = Date.now() - candidate.getTime();
-          days_ago = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-        }
-      } catch (e) {
-        // fallback
-        posted_date = new Date().toISOString();
-      }
+      const parsedDate = parseRelativeDate(j.postedText);
+      const days_ago = Math.floor((Date.now() - parsedDate.getTime()) / (1000 * 60 * 60 * 24));
 
       results.push({
         title: j.title || '',
         company: j.company || '',
-        location: j.location || city || '',
+        location: j.location || city,
         url: j.url || '',
         source: 'linkedin',
-        posted_date,
+        posted_date: parsedDate.toISOString(),
         days_ago
       });
     }
@@ -145,8 +118,8 @@ module.exports = async function linkedinScraper(roles = [], city = '') {
       const html = await page.content();
       fs.writeFileSync('linkedin_debug.html', html);
       console.log('🧾 Saved snapshot: linkedin_debug.html');
-    } catch (writeErr) {
-      console.error('⚠️ Failed to save snapshot:', writeErr.message);
+    } catch (err) {
+      console.error('⚠️ Could not save debug snapshot:', err.message);
     }
   } finally {
     await browser.close();
