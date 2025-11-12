@@ -1,5 +1,5 @@
 import express from "express";
-import pool from "../db.js"; // your Postgres pool
+import pool from "../db/db.js"; // your Postgres pool
 const router = express.Router();
 
 router.post("/upload", async (req, res) => {

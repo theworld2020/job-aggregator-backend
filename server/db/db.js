@@ -1,29 +1,28 @@
-require('dotenv').config();
-const { Pool } = require('pg');
+import pg from "pg";
+import dotenv from "dotenv";
 
-// Create a connection pool to Neon PostgreSQL
+dotenv.config();
+
+const { Pool } = pg;
+
+console.log("🧠 Connecting to database:", process.env.DATABASE_URL);
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+  ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 5000, // ⏱️ fail after 5 seconds
+  idleTimeoutMillis: 10000, // close idle clients after 10 seconds
 });
 
-// Export for other modules
-module.exports = {
-  query: (text, params) => pool.query(text, params),
-  pool
-};
+(async () => {
+  try {
+    const client = await pool.connect();
+    console.log("✅ Connected to PostgreSQL successfully!");
+    client.release();
+  } catch (err) {
+    console.error("❌ PostgreSQL connection failed:", err.message);
+  }
+})();
 
-// Optional: Log a one-time success message when the app starts
-pool.connect()
-  .then(client => {
-    return client.query('SELECT NOW()')
-      .then(res => {
-        console.log('✅ Connected to Neon PostgreSQL:', res.rows[0].now);
-        client.release();
-      })
-      .catch(err => {
-        client.release();
-        console.error('❌ Database connection failed:', err.message);
-      });
-  })
-  .catch(err => console.error('❌ Could not connect to DB:', err.message));
+export default pool;
+
