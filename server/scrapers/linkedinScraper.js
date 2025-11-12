@@ -1,89 +1,86 @@
-const chromium = require("@sparticuz/chromium");
-const puppeteer = require("puppeteer-core");
-const fs = require("fs");
+const axios = require("axios");
+const cheerio = require("cheerio");
 
 module.exports = async function linkedinScraper(roles, city) {
   console.log("🔍 Starting LinkedIn scraper for", roles.join(", "), city);
-
-  let browser;
   const results = [];
 
-  try {
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
+  const headers = {
+    "User-Agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml",
+  };
 
-    const page = await browser.newPage();
-
-    const query = encodeURIComponent(`${roles.join(" OR ")} ${city}`);
-    const url = `https://www.linkedin.com/jobs/search?keywords=${query}&location=${encodeURIComponent(city)}&f_TPR=r604800`;
-    console.log("🌐 Visiting:", url);
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
-
-    // Try to close login or cookie popups
+  for (const role of roles) {
     try {
-      await page.evaluate(() => {
-        const dismissBtns = Array.from(document.querySelectorAll("button"));
-        const dismiss = dismissBtns.find(b => 
-          b.innerText.includes("Sign in") || 
-          b.innerText.includes("Accept") || 
-          b.getAttribute("aria-label")?.includes("Dismiss"));
-        if (dismiss) dismiss.click();
-      });
-    } catch {
-      console.log("ℹ️ No popup to close");
+      const query = encodeURIComponent(`${role} ${city}`);
+      let page = 0;
+      let totalFound = 0;
+
+      while (page < 3) { // scrape 3 pages = ~30 jobs
+        const start = page * 25;
+        const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${query}&location=${encodeURIComponent(
+          city
+        )}&f_TPR=r604800&start=${start}`;
+
+        console.log(`🌐 Fetching (${page + 1}/3): ${url}`);
+
+        const { data: html, status } = await axios.get(url, { headers });
+
+        if (!html || html.trim().length < 100) {
+          console.warn("⚠️ No HTML returned — possible IP block or no results");
+          break;
+        }
+
+        const $ = cheerio.load(html);
+        const cards = $(".base-card");
+
+        if (cards.length === 0) {
+          console.log("⚠️ No job cards found on this page — stopping pagination");
+          break;
+        }
+
+        cards.each((_, el) => {
+          const title = $(el).find(".base-search-card__title").text().trim();
+          const company = $(el).find(".base-search-card__subtitle").text().trim();
+          const location = $(el)
+            .find(".job-search-card__location")
+            .text()
+            .trim();
+          const url = $(el).find("a.base-card__full-link").attr("href");
+          const timeText = $(el).find("time").text().trim() || "0 days ago";
+
+          let days_ago = 0;
+          const match = timeText.match(/(\d+)\s+day/);
+          if (match) days_ago = parseInt(match[1]);
+          const posted_date = new Date();
+          posted_date.setDate(posted_date.getDate() - days_ago);
+
+          if (title && company) {
+            results.push({
+              title,
+              company,
+              location,
+              url,
+              source: "linkedin",
+              posted_date: posted_date.toISOString(),
+              days_ago,
+            });
+          }
+        });
+
+        totalFound += cards.length;
+        console.log(`✅ Page ${page + 1}: Found ${cards.length} jobs`);
+        page++;
+        await new Promise((r) => setTimeout(r, 1500)); // polite delay
+      }
+
+      console.log(`🎯 Total found for "${role}": ${totalFound}`);
+    } catch (err) {
+      console.error(`❌ LinkedIn scrape failed for ${role}:`, err.message);
     }
-
-    // Wait for job cards (LinkedIn changes these often)
-    await page.waitForSelector(".job-search-card", { timeout: 20000 }).catch(() => console.warn("⚠️ No job cards found yet"));
-
-    await autoScroll(page);
-
-    const jobs = await page.$$eval(".job-search-card", els =>
-      els.slice(0, 25).map(el => ({
-        title: el.querySelector(".base-search-card__title")?.innerText.trim() || "",
-        company: el.querySelector(".base-search-card__subtitle")?.innerText.trim() || "",
-        location: el.querySelector(".job-search-card__location")?.innerText.trim() || "",
-        url: el.querySelector("a.base-card__full-link")?.href || "",
-        source: "linkedin",
-        posted_date: new Date().toISOString(),
-        days_ago: 0,
-      }))
-    );
-
-    results.push(...jobs);
-  } catch (e) {
-    console.error("❌ LinkedIn scrape failed:", e.message);
-    try {
-      const html = await (await page.content());
-      fs.writeFileSync("linkedin_debug.html", html);
-      console.log("🧾 Saved snapshot: linkedin_debug.html");
-    } catch {}
-  } finally {
-    if (browser) await browser.close();
   }
 
-  console.log(`✅ LinkedIn scraper found ${results.length} jobs`);
+  console.log(`✅ LinkedIn scraper found ${results.length} total jobs`);
   return results;
 };
-
-async function autoScroll(page) {
-  await page.evaluate(async () => {
-    await new Promise((resolve) => {
-      let totalHeight = 0;
-      const distance = 400;
-      const timer = setInterval(() => {
-        window.scrollBy(0, distance);
-        totalHeight += distance;
-        if (totalHeight >= document.body.scrollHeight) {
-          clearInterval(timer);
-          resolve();
-        }
-      }, 250);
-    });
-  });
-}
