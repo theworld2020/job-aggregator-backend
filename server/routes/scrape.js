@@ -1,62 +1,89 @@
-import express from "express";
-import { runScraper } from "../scrapers/index.js";
-import pool from "../db/db.js";
-
+const express = require('express');
 const router = express.Router();
-const SCRAPE_SECRET = process.env.SCRAPE_SECRET || "S3cureScrape!2025";
+const { Pool } = require('pg');
+const scrapeFromSites = require('../scrapers');
+require('dotenv').config();
 
-/**
- * POST /api/scrape
- * Body: { roles: [string], city: string, sites: [string] }
- */
-router.post("/", async (req, res) => {
-  const { roles, city, sites } = req.body;
-  const headerSecret = req.headers["x-scrape-secret"];
+// PostgreSQL connection pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-  if (headerSecret !== SCRAPE_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
+// 🧠 Test route
+router.get('/test', (req, res) => {
+  res.send('✅ Scrape router is working');
+});
 
-  if (!roles || !Array.isArray(roles) || !city) {
-    return res.status(400).json({ error: "Invalid parameters" });
-  }
+// 🧩 Main scrape endpoint (Cronhooks-compatible)
+router.post('/', async (req, res) => {
+  let { roles, city, sites } = req.body || {};
 
-  console.log("🚀 Triggered scrape for:", roles.join(", "), "in", city);
+  // 🟢 Default roles (your REAL target)
+  roles = Array.isArray(roles) && roles.length > 0
+    ? roles
+    : [
+        'Product Manager',
+        'Product Owner',
+        'Senior Product Owner',
+        'Senior Product Manager'
+      ];
+
+  // 🟢 Default city
+  city = city || 'Bangalore';
+
+  // 🟢 Default sites
+  sites = Array.isArray(sites) && sites.length > 0
+    ? sites
+    : ['linkedin', 'instahyre', 'naukri'];
+
+  console.log(`
+==============================
+🕓 Cron / Manual Scrape Triggered
+Roles: ${roles.join(', ')}
+City: ${city}
+Sites: ${sites.join(', ')}
+Time: ${new Date().toISOString()}
+==============================
+  `);
+
+  let totalInserted = 0;
 
   try {
-    const jobs = await runScraper(roles, city);
-    console.log(`🔍 Total scraped: ${jobs.length}`);
+    // Run scrapers (LinkedIn, Instahyre, Naukri)
+    const allResults = await scrapeFromSites(sites, roles, city);
 
-    let insertedCount = 0;
+    console.log(`🔎 Total jobs fetched: ${allResults.length}`);
 
-    for (const job of jobs) {
-      const { title, company, location, source, url, posted_date } = job;
-
-      // Skip if missing critical data
-      if (!title || !company || !url) continue;
-
-      // Deduplication check (company + title + posted_date)
-      const existing = await pool.query(
-        `SELECT id FROM jobs WHERE company = $1 AND title = $2 AND (posted_date IS NULL OR posted_date = $3) LIMIT 1`,
-        [company, title, posted_date]
-      );
-
-      if (existing.rows.length === 0) {
+    for (const job of allResults) {
+      try {
         await pool.query(
-          `INSERT INTO jobs (title, company, location, source, url, posted_date, scraped_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-          [title, company, location, source, url, posted_date]
+          `INSERT INTO jobs (title, company, location, url, source, posted_date, days_ago)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (url) DO NOTHING`,
+          [
+            job.title,
+            job.company,
+            job.location,
+            job.url,
+            job.source,
+            job.posted_date,
+            job.days_ago
+          ]
         );
-        insertedCount++;
+        totalInserted++;
+      } catch (e) {
+        console.error('❌ Insert error:', e.message);
       }
     }
 
-    console.log(`✅ Inserted ${insertedCount} new jobs into DB.`);
-    res.json({ inserted: insertedCount, totalScraped: jobs.length });
-  } catch (error) {
-    console.error("❌ Scraper error:", error.message);
-    res.status(500).json({ error: "Internal server error" });
+    console.log(`✅ Inserted ${totalInserted} new product roles`);
+    return res.json({ inserted: totalInserted });
+
+  } catch (err) {
+    console.error('❌ Scrape route failed:', err.message);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-export default router;
+module.exports = router;

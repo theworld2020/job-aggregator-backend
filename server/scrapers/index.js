@@ -1,27 +1,16 @@
-import linkedinScraper from "./linkedinScraper.js";
-import naukriScraper from "./naukriScraper.js";
-import instahyreScraper from "./instahyreScraper.js";
+import { linkedinScraper } from "./linkedinScraper.js";
+import { naukriScraper } from "./naukriScraper.js";
+import { instahyreScraper } from "./instahyreScraper.js";
 
-export async function runScraper(sites, roles, city) {
-  console.log(`🚀 Running scrapers for: ${roles.join(", ")} in ${city}`);
+export async function runScraper(sites, roles, city, lastRun) {
+  let results = [];
 
-  let allResults = [];
+  console.log("⏳ Scraping with lastRun =", lastRun);
 
   if (sites.includes("linkedin")) {
-    const linkedinResults = await linkedinScraper(roles, city);
-    allResults = allResults.concat(linkedinResults);
+    const linkedinData = await linkedinScraper(roles, city, lastRun);
+    results = results.concat(linkedinData);
   }
 
-  if (sites.includes("naukri")) {
-    const naukriResults = await naukriScraper(roles, city);
-    allResults = allResults.concat(naukriResults);
-  }
-
-  if (sites.includes("instahyre")) {
-    const instahyreResults = await instahyreScraper(roles, city);
-    allResults = allResults.concat(instahyreResults);
-  }
-
-  console.log(`📦 Total jobs scraped: ${allResults.length}`);
-  return allResults;
+  return results;
 }
