@@ -17,7 +17,10 @@ export async function linkedinScraper(roles, city, lastRun) {
   for (const role of roles) {
     try {
       const query = `${role} ${city}`;
-      const url = `https://www.linkedin.com/jobs/search?keywords=${encodeURIComponent(query)}`;
+   const roleQuery = encodeURIComponent(role);
+const cityQuery = encodeURIComponent(`${city}, India`);
+const url = `https://www.linkedin.com/jobs/search/?keywords=${roleQuery}&location=${cityQuery}`;
+
       console.log("🔗 LinkedIn Fetching:", url);
 
       // fetch HTML (ensure global fetch exists; Node 18+ has fetch)
