@@ -14,12 +14,11 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Test route
 router.get("/test", (req, res) => {
   res.send("✅ Scrape router is working");
 });
 
-// Main scrape route (Cronhooks + manual)
+// Main scrape route
 router.post("/", async (req, res) => {
   let { roles, city, sites } = req.body || {};
 
@@ -34,9 +33,10 @@ router.post("/", async (req, res) => {
 
   city = city || "Bangalore";
 
+  // LinkedIn removed
   sites = Array.isArray(sites) && sites.length > 0
     ? sites
-    : ["linkedin", "instahyre", "naukri"];
+    : ["instahyre", "naukri"];
 
   console.log(`
 ==============================
@@ -51,22 +51,20 @@ Time: ${new Date().toISOString()}
   let totalInserted = 0;
 
   try {
-    // For each site, get that site's last_scraped_at (per-platform), scrape only newer jobs
     for (const site of sites) {
       console.log(`\n--- Site: ${site} ---`);
 
-      // read last_scraped_at for this site
       const statusRes = await pool.query(
         "SELECT last_scraped_at FROM scrape_status WHERE site=$1 LIMIT 1",
         [site]
       );
 
       let lastScrapedAt;
+
       if (statusRes.rowCount === 0) {
-        // first run for this site: use past 12 hours
         lastScrapedAt = new Date(Date.now() - 12 * 60 * 60 * 1000);
-        console.log(`🟢 First run for ${site}, scraping past 12 hours since ${lastScrapedAt.toISOString()}`);
-        // create the row
+        console.log(`🟢 First run for ${site}, scraping last 12 hours starting at ${lastScrapedAt.toISOString()}`);
+
         await pool.query(
           "INSERT INTO scrape_status (site, last_scraped_at) VALUES ($1, NOW())",
           [site]
@@ -76,12 +74,10 @@ Time: ${new Date().toISOString()}
         console.log(`⏳ Last scraped for ${site}: ${lastScrapedAt.toISOString()}`);
       }
 
-      // call scrapers for this single site, passing lastScrapedAt
       const siteResults = await scrapeFromSites([site], roles, city, lastScrapedAt);
 
-      console.log(`📥 ${site} returned ${siteResults.length} jobs filtered by lastScrapedAt`);
+      console.log(`📥 ${site} returned ${siteResults.length} new jobs.`);
 
-      // Insert results (NO dedupe here — you said frontend will handle duplicates)
       for (const job of siteResults) {
         try {
           await pool.query(
@@ -91,11 +87,10 @@ Time: ${new Date().toISOString()}
           );
           totalInserted++;
         } catch (e) {
-          console.error(`❌ Insert error (${site}):`, e.message);
+          console.error(`❌ Insert error for ${site}:`, e.message);
         }
       }
 
-      // update last_scraped_at for this site (overwrite)
       await pool.query(
         "UPDATE scrape_status SET last_scraped_at = NOW() WHERE site=$1",
         [site]
@@ -103,7 +98,7 @@ Time: ${new Date().toISOString()}
       console.log(`✅ Updated last_scraped_at for ${site}`);
     }
 
-    console.log(`\n✅ Scrape finished. Inserted ${totalInserted} rows in total.`);
+    console.log(`\n✅ Scrape completed — total inserted = ${totalInserted}`);
     return res.json({ inserted: totalInserted });
 
   } catch (err) {
