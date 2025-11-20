@@ -1,46 +1,40 @@
 // server/scrapers/linkedinScraper.js
 import * as cheerio from "cheerio";
+import fs from "fs";
 
 /**
- * Robust LinkedIn Guest API scraper (stable production version)
+ * Browserless-backed LinkedIn scraper (production-ready)
  *
- * - Uses LinkedIn "guest" API endpoint that returns HTML (no JS required)
- * - Pagination via start=0,25,50...
- * - User-Agent rotation + retries + exponential backoff
- * - Multi-location fallback attempts
- * - Stops safely after consecutive empty pages or max pages
- *
- * Signature unchanged:
- *   linkedinScraper(roles, city, lastRun)
- *
- * Returns array of objects:
- * { title, company, location, url, source: "linkedin", posted_date, days_ago }
+ * Supports:
+ *  - Browserless rendering
+ *  - Pagination
+ *  - Retry / backoff
+ *  - Multi-location fallback
+ *  - Incremental filtering
+ *  - Debug mode: read HTML from local file
+ *  - HTML saving: write rendered pages into /tmp for debugging
  */
 
-/* ---------------------------
-   Config
-   --------------------------- */
+/* ========== Config ========== */
+const PAGE_SIZE = 25;
+const MAX_PAGES = 8;
+const MAX_CONSECUTIVE_EMPTY = 3;
+const RETRIES = 5;
+const RETRY_BASE_DELAY_MS = 800;
+const PAGE_DELAY_MS = 1200;
+
 const USER_AGENTS = [
-  // a small rotation of realistic UAs
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_4) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
   "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.5993.90 Safari/537.36",
 ];
 
-const PAGE_SIZE = 25;           // linkedIn guest api returns ~25 per page
-const MAX_PAGES = 8;           // avoid infinite long scrapes (cap: 8 pages ~200 results)
-const MAX_CONSECUTIVE_EMPTY = 3; // stop after N consecutive empty pages
-const RETRIES = 4;             // number of retries per request
-const RETRY_BASE_DELAY_MS = 800; // base backoff delay (exponential)
-const PAGE_DELAY_MS = 1400;    // delay between fetching pages (randomized +/- 300ms)
-
-/* ---------------------------
-   Helpers
-   --------------------------- */
+/* ========== Helpers ========== */
 function normalizeCity(city) {
-  if (!city || typeof city !== "string") return "Bengaluru, Karnataka, India";
+  if (!city || typeof city !== "string")
+    return "Bengaluru, Karnataka, India";
+
   const map = {
     bangalore: "Bengaluru, Karnataka, India",
     bengaluru: "Bengaluru, Karnataka, India",
@@ -57,31 +51,25 @@ function normalizeCity(city) {
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
 function randomInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
-
 function pickUserAgent(i = 0) {
-  // rotate UA by index provided (so consecutive pages vary UAs)
   return USER_AGENTS[i % USER_AGENTS.length];
 }
 
-async function fetchWithRetries(url, opts = {}, attempt = 0) {
+async function fetchWithRetries(url, opts = {}) {
   let lastErr = null;
   for (let i = 0; i < RETRIES; i++) {
     try {
       const res = await fetch(url, opts);
-      // treat 200-299 as success, treat 403/429 as temporary and retry
       if (res.ok) return res;
       lastErr = new Error(`HTTP ${res.status}`);
-      // for 429/403 we will retry
       if (res.status === 429 || res.status === 403 || res.status >= 500) {
         const backoff = RETRY_BASE_DELAY_MS * Math.pow(2, i) + randomInt(0, 400);
         await sleep(backoff);
         continue;
       } else {
-        // non-retryable (e.g., 404) - return the response anyway
         return res;
       }
     } catch (err) {
@@ -94,11 +82,7 @@ async function fetchWithRetries(url, opts = {}, attempt = 0) {
   throw lastErr || new Error("fetchWithRetries failed");
 }
 
-/* ---------------------------
-   Parsing helpers
-   --------------------------- */
 function parseJobCard(el, $) {
-  // robust selectors: handle variations of card classes
   const title =
     $(el).find(".base-search-card__title").text().trim() ||
     $(el).find(".result-card__title").text().trim() ||
@@ -108,7 +92,6 @@ function parseJobCard(el, $) {
   const company =
     $(el).find(".base-search-card__subtitle").text().trim() ||
     $(el).find(".result-card__subtitle").text().trim() ||
-    $(el).find(".result-card__subtitle.job-result-card__subtitle").text().trim() ||
     $(el).find(".company-name").text().trim() ||
     "";
 
@@ -118,171 +101,158 @@ function parseJobCard(el, $) {
     $(el).find("[data-test-job-location]").text().trim() ||
     "";
 
-  let link = $(el).find("a.base-card__full-link").attr("href") || $(el).find("a.result-card__full-card-link").attr("href") || "";
-  // ensure absolute URL
+  let link =
+    $(el).find("a.base-card__full-link").attr("href") ||
+    $(el).find("a.result-card__full-card-link").attr("href") ||
+    "";
+
   if (link && link.startsWith("//")) link = "https:" + link;
 
   const postedText = $(el).find("time").attr("datetime") || $(el).find("time").text().trim() || null;
   const postedAt = postedText ? new Date(postedText) : null;
 
-  return {
-    title,
-    company,
-    location: locationText,
-    url: link,
-    postedAt,
-  };
+  return { title, company, location: locationText, url: link, postedAt };
 }
 
-/* ---------------------------
-   Main exported function
-   --------------------------- */
+/* ========== Browserless Render ========== */
+function getBrowserlessBase() {
+  return process.env.BROWSERLESS_BASE_URL || "https://chrome.browserless.io/content";
+}
+
+async function browserlessRender(url, ua, token, debugName = "") {
+  const debugFile = process.env.DEBUG_LINKEDIN_HTML_FILE;
+
+  // Local debugging mode
+  if (debugFile && fs.existsSync(debugFile)) {
+    return fs.readFileSync(debugFile, "utf-8");
+  }
+
+  if (!token) {
+    throw new Error("BROWSERLESS_TOKEN missing");
+  }
+
+  const full = `${getBrowserlessBase()}?token=${encodeURIComponent(
+    token
+  )}&url=${encodeURIComponent(url)}`;
+
+  const resp = await fetchWithRetries(full, {
+    method: "GET",
+    headers: {
+      "User-Agent": ua,
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    },
+  });
+
+  const html = await resp.text();
+
+  /* --- DEBUG SAVE ENABLED? --- */
+  if (process.env.SAVE_LINKEDIN_DEBUG_HTML === "true") {
+    try {
+      const filename = `/tmp/linkedin_debug_${debugName}.html`;
+      fs.writeFileSync(filename, html);
+      console.log(`💾 Saved LinkedIn debug HTML → ${filename}`);
+    } catch (err) {
+      console.warn("⚠️ Failed saving debug HTML:", err.message);
+    }
+  }
+
+  return html;
+}
+
+/* ========== MAIN SCRAPER ========== */
 export async function linkedinScraper(roles, city, lastRun) {
-  console.log(`🟦 LinkedIn (stable) scraper starting — lastRun=${lastRun} — city="${city}"`);
+  console.log(`🟦 LinkedIn (browserless) scraper start — lastRun=${lastRun} city="${city}"`);
 
+  const token = process.env.BROWSERLESS_TOKEN || "";
   const normalizedCity = normalizeCity(city || "Bengaluru");
-  const results = [];
-
-  // Multi-location fallback tries (order matters) — keep city-first then fallback to generic
   const locationFallbacks = [
     normalizedCity,
-    // alternate forms sometimes pass better
     normalizedCity.replace("Bengaluru", "Bangalore"),
     "India",
   ];
 
-  // For each role, iterate through fallbacks until we successfully scrape something
-  for (const role of roles) {
-    let scrapedForRole = false;
+  const results = [];
 
-    for (let locIdx = 0; locIdx < locationFallbacks.length && !scrapedForRole; locIdx++) {
-      const targetLocation = locationFallbacks[locIdx];
-      const encodedRole = encodeURIComponent(role);
-      const encodedLocation = encodeURIComponent(targetLocation);
+  for (const role of roles) {
+    let matched = false;
+
+    for (let locIdx = 0; locIdx < locationFallbacks.length && !matched; locIdx++) {
+      const loc = locationFallbacks[locIdx];
+      const r = encodeURIComponent(role);
+      const l = encodeURIComponent(loc);
 
       let start = 0;
-      let consecutiveEmpty = 0;
+      let empty = 0;
 
       for (let page = 0; page < MAX_PAGES; page++) {
-        // rotate User-Agent by page index
-        const ua = pickUserAgent(page + locIdx);
-        const apiUrl = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodedRole}&location=${encodedLocation}&start=${start}`;
+        await sleep(PAGE_DELAY_MS + randomInt(-300, 300));
+        const ua = pickUserAgent(page);
 
-        // small random delay before page fetch to mimic human scroll
-        const jitter = randomInt(-250, 250);
-        await sleep(Math.max(0, PAGE_DELAY_MS + jitter));
+        const browserUrl = `https://www.linkedin.com/jobs/search/?keywords=${r}&location=${l}&start=${start}`;
+
+        let html;
 
         try {
-          const resp = await fetchWithRetries(apiUrl, {
-            headers: {
-              "User-Agent": ua,
-              Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-              "Accept-Language": "en-US,en;q=0.9",
-            },
-            // no-cache to reduce CDN/edge sticky responses
-            cache: "no-store",
+          html = await browserlessRender(
+            browserUrl,
+            ua,
+            token,
+            `${role.replace(/ /g, "_")}_${loc.replace(/ /g, "_")}_start${start}`
+          );
+        } catch (err) {
+          console.error("❌ Browserless error:", err.message);
+          empty++;
+          if (empty >= MAX_CONSECUTIVE_EMPTY) break;
+          continue;
+        }
+
+        if (!html || html.length < 200) {
+          console.warn(`⚠️ Empty HTML page for ${browserUrl}`);
+          empty++;
+          if (empty >= MAX_CONSECUTIVE_EMPTY) break;
+          start += PAGE_SIZE;
+          continue;
+        }
+
+        const $ = cheerio.load(html);
+        const cards = $(".base-card, li.result-card, .job-card-container, .job-result-card, article");
+        let count = 0;
+
+        cards.each((_, el) => {
+          const job = parseJobCard(el, $);
+          if (!job.title || !job.company) return;
+
+          if (job.postedAt && lastRun && job.postedAt <= new Date(lastRun)) {
+            return;
+          }
+
+          results.push({
+            title: job.title,
+            company: job.company,
+            location: job.location,
+            url: job.url,
+            source: "linkedin",
+            posted_date: job.postedAt ? job.postedAt.toISOString() : null,
+            days_ago: null,
           });
 
-          if (!resp) {
-            console.warn("⚠️ Empty response object from fetchWithRetries");
-            consecutiveEmpty++;
-            if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) break;
-            continue;
-          }
+          count++;
+        });
 
-          const text = await resp.text();
+        console.log(`🔍 role="${role}" loc="${loc}" page=${page} found=${count}`);
 
-          // if very small HTML, likely blocked or empty — retry/backoff handled in fetchWithRetries
-          if (!text || text.trim().length < 200) {
-            console.warn(`⚠️ Small/empty HTML for ${apiUrl} (len=${text ? text.length : 0})`);
-            consecutiveEmpty++;
-            if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) break;
-            // try next page after delay
-            start += PAGE_SIZE;
-            continue;
-          }
+        if (count === 0) empty++;
+        else empty = 0;
 
-          // Parse HTML page for cards
-          const $ = cheerio.load(text);
-          // guest API returns li elements or base-card depending on template: handle both
-          const cards = $(".base-card, li.result-card, .job-card-container, .job-result-card");
-          let pageCount = 0;
+        if (empty >= MAX_CONSECUTIVE_EMPTY) break;
+        if (count < PAGE_SIZE) break;
 
-          // If the guest API returned a fragment with <li> job elements, parse them
-          if (cards.length === 0) {
-            // Some variations use 'article' or 'div' with job-result style
-            const altCards = $("article, .jobs-search-results__list-item, .jobs-search__results-list li");
-            altCards.each((i, el) => {
-              const parsed = parseJobCard(el, $);
-              if (!parsed.title && !parsed.company) return;
-              // incremental filter
-              if (parsed.postedAt && lastRun && parsed.postedAt <= new Date(lastRun)) return;
-              results.push({
-                title: parsed.title,
-                company: parsed.company,
-                location: parsed.location,
-                url: parsed.url,
-                source: "linkedin",
-                posted_date: parsed.postedAt ? parsed.postedAt.toISOString() : null,
-                days_ago: null,
-              });
-              pageCount++;
-            });
-          } else {
-            cards.each((i, el) => {
-              const parsed = parseJobCard(el, $);
-              if (!parsed.title && !parsed.company) return;
-              // incremental filter
-              if (parsed.postedAt && lastRun && parsed.postedAt <= new Date(lastRun)) return;
-              results.push({
-                title: parsed.title,
-                company: parsed.company,
-                location: parsed.location,
-                url: parsed.url,
-                source: "linkedin",
-                posted_date: parsed.postedAt ? parsed.postedAt.toISOString() : null,
-                days_ago: null,
-              });
-              pageCount++;
-            });
-          }
+        matched = true;
+        start += PAGE_SIZE;
+      }
+    }
+  }
 
-          console.log(`🔍 role="${role}" loc="${targetLocation}" page=${page} found=${pageCount}`);
-
-          if (pageCount === 0) {
-            consecutiveEmpty++;
-          } else {
-            consecutiveEmpty = 0;
-            scrapedForRole = true; // we found at least one job for this role/location
-          }
-
-          // stop if we've seen many empty consecutive pages
-          if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
-            console.log(`⚠️ Stopping pages for role="${role}" loc="${targetLocation}" after ${consecutiveEmpty} empty pages`);
-            break;
-          }
-
-          // stop if the page had fewer than typical (last page)
-          if (pageCount < PAGE_SIZE) {
-            // likely last page for this query
-            break;
-          }
-
-          // otherwise go to next page
-          start += PAGE_SIZE;
-        } catch (err) {
-          console.error(`❌ Error fetching LinkedIn page for role="${role}" loc="${targetLocation}" start=${start}:`, err.message || err);
-          // on error, increment consecutiveEmpty and decide to break eventually
-          consecutiveEmpty++;
-          if (consecutiveEmpty >= MAX_CONSECUTIVE_EMPTY) {
-            console.log(`⚠️ Too many errors/empty pages. Breaking for role="${role}" loc="${targetLocation}"`);
-            break;
-          }
-        }
-      } // end pages loop
-    } // end location fallback loop
-  } // end roles loop
-
-  console.log(`✅ LinkedIn stable scraper completed. totalJobs=${results.length}`);
+  console.log(`✅ LinkedIn (browserless) scraper finished. totalJobs=${results.length}`);
   return results;
 }
