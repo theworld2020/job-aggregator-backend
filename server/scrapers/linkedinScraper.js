@@ -19,55 +19,29 @@ function normalizeCity(city) {
 }
 
 /**
- * Extract JSON from <script type="application/ld+json"> blocks
- */
-function extractJSONData(html) {
-  const $ = cheerio.load(html);
-  let jobs = [];
-
-  $("script[type='application/ld+json']").each((_, el) => {
-    try {
-      const jsonText = $(el).html();
-      if (!jsonText) return;
-
-      const data = JSON.parse(jsonText);
-
-      // If it's a job posting
-      if (Array.isArray(data)) {
-        data.forEach((obj) => {
-          if (obj["@type"] === "JobPosting") {
-            jobs.push(obj);
-          }
-        });
-      } else if (data["@type"] === "JobPosting") {
-        jobs.push(data);
-      }
-    } catch (err) {
-      // Ignore broken JSON blocks
-    }
-  });
-
-  return jobs;
-}
-
-/**
- * Final LinkedIn Scraper (JSON based)
+ * FINAL LINKEDIN SCRAPER — GUEST API (BEST & RELIABLE)
  */
 export async function linkedinScraper(roles, city, lastRun) {
-  console.log(`🟦 LinkedIn scraper (JSON) running. lastRun = ${lastRun}`);
+  console.log(`🟦 LinkedIn Guest API scraper running. lastRun = ${lastRun}`);
 
-  const normalizedLocation = normalizeCity(city);
-  const allJobs = [];
+  let allResults = [];
+  const normalizedCity = normalizeCity(city);
 
   for (const role of roles) {
-    try {
-      const roleQuery = encodeURIComponent(role);
-      const locQuery = encodeURIComponent(normalizedLocation);
+    const encodedRole = encodeURIComponent(role);
+    const encodedCity = encodeURIComponent(normalizedCity);
 
-      const url = `https://www.linkedin.com/jobs/search/?keywords=${roleQuery}&location=${locQuery}`;
-      console.log("🔗 Fetching LinkedIn:", url);
+    let start = 0;
+    let hasMore = true;
 
-      const resp = await fetch(url, {
+    while (hasMore) {
+      const apiUrl =
+        `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search` +
+        `?keywords=${encodedRole}&location=${encodedCity}&start=${start}`;
+
+      console.log("🔗 Fetching:", apiUrl);
+
+      const resp = await fetch(apiUrl, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
@@ -75,52 +49,65 @@ export async function linkedinScraper(roles, city, lastRun) {
       });
 
       if (!resp.ok) {
-        console.warn(`⚠️ LinkedIn fetch failed ${resp.status}`);
-        continue;
+        console.warn(`⚠️ Guest API failed ${resp.status}`);
+        break;
       }
 
       const html = await resp.text();
 
-      // Extract JSON
-      const jsonJobs = extractJSONData(html);
-
-      console.log(`📥 Extracted ${jsonJobs.length} JSON jobs from LinkedIn`);
-
-      for (const job of jsonJobs) {
-        try {
-          const title = job.title || "";
-          const company = job.hiringOrganization?.name || "";
-          const location =
-            job.jobLocation?.address?.addressLocality ||
-            job.jobLocation?.address?.addressRegion ||
-            job.jobLocation?.address?.addressCountry ||
-            "";
-          const url = job.url || "";
-          const postedDate = job.datePosted ? new Date(job.datePosted) : null;
-
-          // Incremental filtering
-          if (postedDate && lastRun && postedDate <= new Date(lastRun)) {
-            continue;
-          }
-
-          allJobs.push({
-            title,
-            company,
-            location,
-            url,
-            source: "linkedin",
-            posted_date: postedDate ? postedDate.toISOString() : null,
-            days_ago: null,
-          });
-        } catch (err) {
-          console.warn("⚠️ JSON job parse error:", err.message);
-        }
+      // When no more jobs:
+      if (!html || html.trim() === "") {
+        hasMore = false;
+        break;
       }
-    } catch (err) {
-      console.error("❌ LinkedIn JSON scrape error:", err.message);
+
+      const $ = cheerio.load(html);
+
+      let pageCount = 0;
+
+      $(".base-card").each((_, el) => {
+        pageCount++;
+
+        const title = $(el)
+          .find(".base-search-card__title")
+          .text()
+          .trim();
+        const company = $(el)
+          .find(".base-search-card__subtitle")
+          .text()
+          .trim();
+        const locationText = $(el)
+          .find(".job-search-card__location")
+          .text()
+          .trim();
+        const link = $(el)
+          .find("a.base-card__full-link")
+          .attr("href");
+
+        const postedText = $(el).find("time").attr("datetime");
+        const postedAt = postedText ? new Date(postedText) : null;
+
+        // Incremental filter
+        if (lastRun && postedAt && postedAt <= new Date(lastRun)) {
+          return;
+        }
+
+        allResults.push({
+          title,
+          company,
+          location: locationText,
+          url: link,
+          source: "linkedin",
+          posted_date: postedAt ? postedAt.toISOString() : null,
+          days_ago: null,
+        });
+      });
+
+      console.log(`📄 Page had ${pageCount} jobs.`);
+      start += 25; // next page
     }
   }
 
-  console.log(`✅ LinkedIn JSON scraper found ${allJobs.length} jobs.`);
-  return allJobs;
+  console.log(`✅ FINAL: LinkedIn extracted ${allResults.length} jobs.`);
+  return allResults;
 }
