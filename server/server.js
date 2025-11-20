@@ -101,4 +101,34 @@ app.get("/api/health", async (req, res) => {
 
 /* =============================================================
    🔗 ROUTES
-==========================================================
+============================================================= */
+app.use("/api/jobs", jobsRouter);    // Upload endpoint (x-scrape-secret protected)
+app.use("/api/scrape", scrapeRouter); // Cronhooks + manual scraping
+
+/* =============================================================
+   🚀 START SERVER
+============================================================= */
+app.listen(PORT, "0.0.0.0", async () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  try {
+    const client = await pool.connect();
+    console.log("✅ PostgreSQL connected");
+    client.release();
+  } catch (err) {
+    console.error("❌ DB connection failed:", err.message);
+  }
+});
+
+/* =============================================================
+   🔄 KEEP ALIVE PING FOR NEON
+============================================================= */
+setInterval(async () => {
+  try {
+    const client = await pool.connect();
+    await client.query("SELECT 1");
+    client.release();
+    console.log("💓 DB Ping:", new Date().toISOString());
+  } catch (err) {
+    console.error("⚠️ DB Ping Failed:", err.message);
+  }
+}, 5 * 60 * 1000);
