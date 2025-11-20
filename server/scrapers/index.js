@@ -1,40 +1,39 @@
-/*
-  scrapeFromSites(sites, roles, city)
-  - sites: array of site keys ['linkedin','naukri',...]
-  - roles: array of role strings
-  - city: location string
+// scrapers/index.js (FINAL ESM VERSION)
 
-  This file should import and call individual scrapers and return a flat array
-  of job objects: [{title, company, location, url, source, posted_date, days_ago}, ...]
-*/
+import { linkedinScraper } from "./linkedinScraper.js";
+import { naukriScraper } from "./naukriScraper.js";
+import { instahyreScraper } from "./instahyreScraper.js";
 
-const linkedin = require('./linkedinScraper');
-const naukri = require('./naukriScraper');
-const instahyre = require('./instahyreScraper');
-
-module.exports = async function scrapeFromSites(sites, roles, city) {
+export default async function scrapeFromSites(sites, roles, city) {
   let results = [];
 
-  const jobsBySite = await Promise.all(sites.map(async (site) => {
-    try {
-      if (site === 'linkedin' && typeof linkedin === 'function') {
-        return await linkedin(roles, city);
-      } else if (site === 'naukri' && typeof naukri === 'function') {
-        return await naukri(roles, city);
-      } else if (site === 'instahyre' && typeof instahyre === 'function') {
-        return await instahyre(roles, city);
-      } else {
+  const jobsBySite = await Promise.all(
+    sites.map(async (site) => {
+      try {
+        if (site === "linkedin") {
+          return await linkedinScraper(roles, city);
+        }
+        if (site === "naukri") {
+          return await naukriScraper(roles, city);
+        }
+        if (site === "instahyre") {
+          return await instahyreScraper(roles, city);
+        }
+
+        return [];
+      } catch (err) {
+        console.error(`❌ Scraper error for ${site}:`, err.message);
         return [];
       }
-    } catch (err) {
-      console.error('Scraper error for', site, err.message);
-      return [];
-    }
-  }));
+    })
+  );
 
+  // Flatten results
   for (const arr of jobsBySite) {
-    if (Array.isArray(arr)) results = results.concat(arr);
+    if (Array.isArray(arr)) {
+      results = results.concat(arr);
+    }
   }
 
   return results;
-};
+}

@@ -1,42 +1,48 @@
-const express = require('express');
+import express from "express";
+import pkg from "pg";
+import scrapeFromSites from "../scrapers/index.js";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+const { Pool } = pkg;
 const router = express.Router();
-const { Pool } = require('pg');
-const scrapeFromSites = require('../scrapers');
-require('dotenv').config();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-router.get('/test', (req, res) => {
-  res.send('✅ Scrape router is working');
+// Test route
+router.get("/test", (req, res) => {
+  res.send("✅ Scrape router is working");
 });
 
-router.post('/', async (req, res) => {
+// Main scrape route (Cronhooks + manual)
+router.post("/", async (req, res) => {
   let { roles, city, sites } = req.body || {};
 
   roles = Array.isArray(roles) && roles.length > 0
     ? roles
     : [
-        'Product Manager',
-        'Product Owner',
-        'Senior Product Owner',
-        'Senior Product Manager'
+        "Product Manager",
+        "Product Owner",
+        "Senior Product Owner",
+        "Senior Product Manager"
       ];
 
-  city = city || 'Bangalore';
+  city = city || "Bangalore";
 
   sites = Array.isArray(sites) && sites.length > 0
     ? sites
-    : ['linkedin', 'instahyre', 'naukri'];
+    : ["linkedin", "instahyre", "naukri"];
 
   console.log(`
 ==============================
-🕓 Cron / Manual Scrape Triggered
-Roles: ${roles.join(', ')}
+🕓 Scrape Triggered
+Roles: ${roles.join(", ")}
 City: ${city}
-Sites: ${sites.join(', ')}
+Sites: ${sites.join(", ")}
 Time: ${new Date().toISOString()}
 ==============================
   `);
@@ -66,17 +72,17 @@ Time: ${new Date().toISOString()}
         );
         totalInserted++;
       } catch (e) {
-        console.error('❌ Insert error:', e.message);
+        console.error("❌ Insert error:", e.message);
       }
     }
 
-    console.log(`✅ Inserted ${totalInserted} new product roles`);
+    console.log(`✅ Inserted ${totalInserted} new jobs`);
     return res.json({ inserted: totalInserted });
 
   } catch (err) {
-    console.error('❌ Scrape route failed:', err.message);
+    console.error("❌ Scrape route failed:", err.message);
     return res.status(500).json({ error: err.message });
   }
 });
 
-module.exports = router;
+export default router;
