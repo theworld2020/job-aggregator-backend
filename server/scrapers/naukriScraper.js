@@ -1,6 +1,13 @@
-export async function naukriScraper(roles, city) {
-  console.log("🟧 Naukri scraper placeholder running for", roles.join(","), city);
+// server/scrapers/naukriScraper.js
 
-  // TODO: implement API-based scraper later
+/**
+ * naukriScraper(roles, city, lastRun)
+ * Placeholder implementation: implement API or HTML scraping similarly to LinkedIn.
+ * It must return an array of objects with the same shape as LinkedIn's output.
+ */
+export async function naukriScraper(roles, city, lastRun) {
+  console.log(`🟧 Naukri scraper running (placeholder). lastRun=${lastRun}`);
+  // TODO: implement precise scraping logic
+  // For now, return [] (no jobs)
   return [];
 }

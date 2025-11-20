@@ -1,6 +1,12 @@
-export async function instahyreScraper(roles, city) {
-  console.log("🟩 Instahyre scraper placeholder running for", roles.join(","), city);
+// server/scrapers/instahyreScraper.js
 
-  // TODO: implement Instahyre scraper
+/**
+ * instahyreScraper(roles, city, lastRun)
+ * Placeholder for Instahyre scraping. Must return array of job objects:
+ * { title, company, location, url, source, posted_date, days_ago }
+ */
+export async function instahyreScraper(roles, city, lastRun) {
+  console.log(`🟩 Instahyre scraper running (placeholder). lastRun=${lastRun}`);
+  // TODO: implement scraping logic
   return [];
 }
