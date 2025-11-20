@@ -4,18 +4,22 @@ const { Pool } = require('pg');
 const scrapeFromSites = require('../scrapers');
 require('dotenv').config();
 
+// PostgreSQL connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
+// 🧠 Test route
 router.get('/test', (req, res) => {
   res.send('✅ Scrape router is working');
 });
 
+// 🧩 Main scrape endpoint (Cronhooks-compatible)
 router.post('/', async (req, res) => {
   let { roles, city, sites } = req.body || {};
 
+  // 🟢 Default roles (your REAL target)
   roles = Array.isArray(roles) && roles.length > 0
     ? roles
     : [
@@ -25,8 +29,10 @@ router.post('/', async (req, res) => {
         'Senior Product Manager'
       ];
 
+  // 🟢 Default city
   city = city || 'Bangalore';
 
+  // 🟢 Default sites
   sites = Array.isArray(sites) && sites.length > 0
     ? sites
     : ['linkedin', 'instahyre', 'naukri'];
@@ -44,6 +50,7 @@ Time: ${new Date().toISOString()}
   let totalInserted = 0;
 
   try {
+    // Run scrapers (LinkedIn, Instahyre, Naukri)
     const allResults = await scrapeFromSites(sites, roles, city);
 
     console.log(`🔎 Total jobs fetched: ${allResults.length}`);

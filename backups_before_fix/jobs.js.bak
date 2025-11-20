@@ -3,21 +3,23 @@ import pool from "../db/db.js";
 const router = express.Router();
 
 /**
- * Only the /upload route is protected with the x-scrape-secret header.
- * No global router middleware that returns Forbidden.
+ * 🟢 IMPORTANT:
+ * Secret check ONLY for /upload route.
+ * No middleware above this.
  */
 
 router.post("/upload", async (req, res) => {
   try {
     const secret = req.headers["x-scrape-secret"];
+
+    // Secret only for /upload
     if (secret !== process.env.SCRAPE_SECRET) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
     const { jobs } = req.body;
-    if (!jobs || !Array.isArray(jobs) || jobs.length === 0) {
+    if (!jobs || !Array.isArray(jobs) || jobs.length === 0)
       return res.status(400).json({ error: "No jobs provided" });
-    }
 
     let inserted = 0;
 
