@@ -1,16 +1,27 @@
 import express from "express";
-import pool from "../db/db.js"; // your Postgres pool
+import pool from "../db/db.js"; 
 const router = express.Router();
+
+/**
+ * 🟢 IMPORTANT FIX
+ * Apply secret check ONLY for /upload route
+ * Not globally for all /api/jobs routes
+ */
 
 router.post("/upload", async (req, res) => {
   try {
     const secret = req.headers["x-scrape-secret"];
-    if (secret !== process.env.SCRAPE_SECRET)
+    
+    // Secret protection ONLY for upload API
+    if (secret !== process.env.SCRAPE_SECRET) {
       return res.status(403).json({ error: "Forbidden" });
+    }
 
     const { jobs } = req.body;
-    if (!jobs || !Array.isArray(jobs) || jobs.length === 0)
+
+    if (!jobs || !Array.isArray(jobs) || jobs.length === 0) {
       return res.status(400).json({ error: "No jobs provided" });
+    }
 
     let inserted = 0;
 
